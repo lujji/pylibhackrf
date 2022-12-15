@@ -4,9 +4,11 @@
 #include <libhackrf/hackrf.h>
 #include <Python.h>
 
-#if defined(DEBUG)
+#if defined(DEBUG) && (DEBUG == 1)
 #include <stdio.h>
 #define DEBUG_OUT(...)  printf(__VA_ARGS__);
+#else
+#define DEBUG_OUT(...)
 #endif
 
 static int8_t *buf = NULL;
