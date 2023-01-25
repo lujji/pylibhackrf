@@ -1,23 +1,11 @@
-# pylibhackrf
-Python module for communicating with HackRF
-
-## Building
-Requires libpython3-dev and libhackrf-dev >= 2022.09.1
-
-```
-cd py_hackrf && python3 setup.py build_ext --inplace
-```
-
-## Example
-``` Python
-import py_hackrf
+from py_hackrf import py_hackrf
 from time import sleep
 
 # frequency = 433.92MHz, sample rate = 2MSPS
 py_hackrf.init(433920000, 2000000)
 py_hackrf.set_tx_gain(40)
 
-payload = [] # fill in tx buffer here
+payload = [0xff]*32 # fill in tx buffer here
 
 # start tx and wait for it to finish
 py_hackrf.start_tx(payload)
@@ -29,4 +17,3 @@ py_hackrf.stop_transfer()
 
 # cleanup
 py_hackrf.deinit()
-```
