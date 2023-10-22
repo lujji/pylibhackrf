@@ -21,8 +21,33 @@ static volatile bool busy = false;
 static bool initialized = false;
 static hackrf_device* device = NULL;
 
+static inline int allocate_buf(size_t size) {
+    if (buf != NULL) {
+        DEBUG_OUT("buffer is dirty - reallocation\n");
+        buf = (int8_t *) realloc(buf, size);
+    } else {
+        DEBUG_OUT("allocating buffer\n");
+        buf = (int8_t *) malloc(size);
+    }
+
+    if (buf == NULL) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static inline void free_buf() {
+    if (buf != NULL) {
+        DEBUG_OUT("freeing buffer\n");
+        free(buf);
+        buf = NULL;
+    }
+}
+
 static void flush_callback(void* flush_ctx, int success) {
     DEBUG_OUT("flush callback: %d\n", success);
+    free_buf();
     busy = false;
 }
 
@@ -145,6 +170,18 @@ static PyObject *py_set_amp(PyObject *self, PyObject *args) {
     return Py_BuildValue("i", ok);
 }
 
+static PyObject *py_set_antenna_enable(PyObject *self, PyObject *args) {
+    uint32_t enable;
+
+    if (!PyArg_ParseTuple(args, "I", &enable)) {
+        PyErr_SetString(PyExc_TypeError, "argument must be int");
+        return NULL;
+    }
+
+    int ok = hackrf_set_antenna_enable(device, (uint8_t) enable);
+    return Py_BuildValue("i", ok);
+}
+
 static PyObject *py_start_rx(PyObject *self, PyObject *args) {
     if (busy) {
         Py_RETURN_FALSE;
@@ -161,8 +198,7 @@ static PyObject *py_start_rx(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    buf = (int8_t *) malloc(samples);
-    if (buf == NULL) {
+    if (allocate_buf(samples) != 0) {
         PyErr_NoMemory();
         return NULL;
     }
@@ -179,6 +215,9 @@ static PyObject *py_read(PyObject *self, PyObject *Py_UNUSED(unused)) {
     if (busy) {
         DEBUG_OUT("rx busy\n");
         Py_RETURN_NONE;
+    } else if (buf == NULL) {
+        DEBUG_OUT("buffer not allocated\n");
+        Py_RETURN_NONE;
     }
 
     hackrf_stop_rx(device);
@@ -188,8 +227,7 @@ static PyObject *py_read(PyObject *self, PyObject *Py_UNUSED(unused)) {
         PyList_SetItem(array, i, PyLong_FromLong((long) buf[i]));
     }
 
-    free(buf);
-    buf = NULL;
+    free_buf();
 
     return array;
 }
@@ -216,10 +254,7 @@ static PyObject *py_start_tx(PyObject *self, PyObject *args) {
 
     size_t len = PyObject_Length(tx_list);
 
-    DEBUG_OUT("allocating buffer\n");
-    buf = (int8_t *) malloc(len);
-
-    if (buf == NULL) {
+    if (allocate_buf(len) != 0) {
         PyErr_NoMemory();
         return NULL;
     }
@@ -256,11 +291,7 @@ static PyObject *py_deinit(PyObject *self, PyObject *Py_UNUSED(unused)) {
     hackrf_close(device);
     hackrf_exit(device);
 
-    if (buf != NULL) {
-        DEBUG_OUT("freeing buffer\n");
-        free(buf);
-        buf = NULL;
-    }
+    free_buf();
 
     Py_RETURN_NONE;
 }
@@ -294,6 +325,7 @@ static PyMethodDef methodTable[] = {
     {"set_tx_gain", py_set_tx_gain, METH_VARARGS, "set tx gain"},
     {"set_rx_gain", py_set_rx_gain, METH_VARARGS, "set rx lna and vga"},
     {"set_amp", py_set_amp, METH_VARARGS, "set rf amp state"},
+    {"set_antenna_enable", py_set_antenna_enable, METH_VARARGS, "enable antenna port power"},
     {"stop_transfer", py_stop_transfer, METH_NOARGS, "stop transmission"},
     { NULL, NULL, 0, NULL}
 };

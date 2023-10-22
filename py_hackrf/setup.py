@@ -7,6 +7,7 @@ setup(name='py_hackrf',
                     ['py_hackrf.c'],
                     include_dirs=['/usr/include'],
                     define_macros=[('DEBUG', '0')],
+                    extra_compile_args=['-O3'],
                     library_dirs=['/usr/local/lib'],
                     libraries=['hackrf'])]
       )

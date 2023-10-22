@@ -101,7 +101,7 @@ if __name__ == '__main__':
     py_hackrf.init(433920000, 2000000)
     py_hackrf.set_tx_gain(40)
 
-    ook = OOK(F_S=2000000, F=14000, symbol_len=800, pause_len=20000)
+    ook = OOK(F_S=2e6, F=14e3, symbol_len=800, pause_len=20000)
 
     '''
     transmit all possible addresses for JZFR22 doorbells
@@ -109,9 +109,9 @@ if __name__ == '__main__':
     last 3 symbols are the address - total of 8 combinations
     message is 8 symbols + 1 sync pulse followed by a pause
 
-    100 110 110 100 100  110 110 100 1p
+    100 110 110 100 100  110 110 100  1p
      0   1   1   0   0    1   1   0
-    |     preamble     | |   addr  || s |
+    |     preamble     | |   addr  | | s |
     '''
     preamble = '01100'
     enc = {'0' : '100', '1': '110'}
@@ -119,11 +119,16 @@ if __name__ == '__main__':
     for i in range(8):
         addr = '{0:03b}'.format(i)
         print(f'trying address {addr}')
-        msg = ook.generate(ook.encode(preamble + addr, enc) + '1p')
 
+        msg = preamble + addr
+        msg = ook.encode(msg, {'0':'100','1':'110'}) + '1p'
+        msg = ook.generate(msg)
+
+        # packet should be repeated at least 8 times
         py_hackrf.start_tx(msg*32)
         while py_hackrf.busy():
             sleep(0.1)
         py_hackrf.stop_transfer()
 
     py_hackrf.deinit()
+
