@@ -1,6 +1,9 @@
 # pylibhackrf
 Python module for communicating with HackRF
 
+- example_ook.py - OOK (on-off keying) processor
+- example_rx/tx - rx/tx examples
+
 ## Building
 Requires libpython3-dev and libhackrf-dev >= 2022.09.1
 
