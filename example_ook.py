@@ -25,9 +25,9 @@ class OOK:
                         for i in range(round(F_S/F))])
         self.sine_lut = [int(round(i))
                         for _ in list(zip(lut.real, lut.imag)) for i in _]
-        print([int(round(i)) for i in lut.real])
-        print([int(round(i)) for i in lut.imag])
-        print(len([int(round(i)) for i in lut.imag]))
+        # print([int(round(i)) for i in lut.real])
+        # print([int(round(i)) for i in lut.imag])
+        # print(len([int(round(i)) for i in lut.imag]))
         self.symbol_0 = [0] * self.symbol_len
         self.symbol_p = [0] * self.pause_len
 
@@ -116,8 +116,9 @@ if __name__ == '__main__':
     preamble = '01100'
     enc = {'0' : '100', '1': '110'}
 
-    for i in range(9):
+    for i in range(8):
         addr = '{0:03b}'.format(i)
+        print(f'trying address {addr}')
         msg = ook.generate(ook.encode(preamble + addr, enc) + '1p')
 
         py_hackrf.start_tx(msg*32)
