@@ -282,6 +282,31 @@ static PyObject *py_start_tx(PyObject *self, PyObject *args) {
     return Py_BuildValue("i", ok);
 }
 
+static PyObject *py_start_sweep(PyObject *self, PyObject *args) {
+/*
+ * Initialize sweep mode:
+ * frequency_list is a list of start/stop pairs of frequencies in MHz.
+ * num_ranges is the number of pairs in frequency_list (1 to 10)
+ * num_bytes is the number of sample bytes to capture after each tuning.
+ * step_width is the width in Hz of the tuning step.
+ * offset is a number of Hz added to every tuning frequency.
+ *     Use to select center frequency based on the expected usable bandwidth.
+ * sweep_mode
+ *     LINEAR means step_width is added to the current frequency at each step.
+ *     INTERLEAVED invokes a scheme in which each step is divided into two
+ *         interleaved sub-steps, allowing the host to select the best portions
+ *         of the FFT of each sub-step and discard the rest.
+ */
+    int ok = hackrf_init_sweep(device,
+        const uint16_t* frequency_list,
+        const int num_ranges,      // 1-10
+        const uint32_t num_bytes,  // multiple of 16384
+        const uint32_t step_width, // Hz, >1
+        const uint32_t offset,
+        const enum sweep_style style); // 0 - linear, 1 - interleaved
+    ok = hackrf_start_rx_sweep(device, rx_callback, NULL);
+}
+
 static PyObject *py_deinit(PyObject *self, PyObject *Py_UNUSED(unused)) {
     if (!initialized) {
         PyErr_SetString(PyExc_TypeError, "not initialized!");
