@@ -1,11 +1,11 @@
 # pylibhackrf
-Python module for communicating with HackRF. This extension is written in C as opposed to various python wrappers around libhackrf that handle libusb callbacks from Python, which quickly becomes unusable at higher sample rates. The library uses a FIFO for rx/tx and supports streaming mode.
+Python module for communicating with HackRF. This extension is written in C as opposed to various python wrappers around libhackrf that handle libusb callbacks from Python, which quickly becomes unusable at higher sample rates. The library uses a FIFO for rx/tx and supports streaming mode. For usage examples check out [examples](https://github.com/lujji/pylibhackrf-examples) repo.
 
 ## Building
 Requires libpython3-dev and libhackrf-dev >= 2022.09.1
 
 ```
-cd py_hackrf && python3 setup.py build_ext --inplace
+python3 setup.py build_ext --inplace
 ```
 
 ## Example

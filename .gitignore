@@ -1,2 +1,2 @@
-py_hackrf/build
-py_hackrf/*.so
+build
+*.so
