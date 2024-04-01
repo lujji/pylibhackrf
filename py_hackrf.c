@@ -36,7 +36,7 @@ static int pkt_allocate(HackrfObject *self, size_t size) {
         DEBUG_OUT("buffer is dirty - reallocation\n");
         self->data_pkt.buf = (int8_t *) realloc(self->data_pkt.buf, size);
     } else {
-        DEBUG_OUT("allocating buffer, size %ld\n", size);
+        DEBUG_OUT("allocating buffer, size %zu\n", size);
         self->data_pkt.buf = (int8_t *) malloc(size);
     }
 
@@ -54,6 +54,15 @@ static void pkt_free(HackrfObject *self) {
         free(self->data_pkt.buf);
         self->data_pkt.buf = NULL;
         self->data_pkt.size = 0;
+    }
+}
+
+static void flush_queue(struct queue *q) {
+    struct packet pkt;
+    while (queue_pop_noblock(q, &pkt)) {
+        if (pkt.buf != NULL) {
+            free(pkt.buf);
+        }
     }
 }
 
@@ -79,7 +88,7 @@ static int tx_callback(hackrf_transfer *transfer) {
         ret = -1;
     }
 
-    DEBUG_OUT("buffer_length = %ld, len = %ld\n", buffer_length, len);
+    DEBUG_OUT("buffer_length = %zu, len = %zu\n", buffer_length, len);
 
     memcpy(transfer->buffer, self->data_pkt.buf + self->tx_idx, len);
     self->tx_idx += buffer_length;
@@ -99,7 +108,7 @@ static int rx_callback(hackrf_transfer *transfer) {
     size_t len = transfer->valid_length;
     if (self->rx_idx + len >= self->data_pkt.size) {
         len = self->data_pkt.size - self->rx_idx;
-        DEBUG_OUT("rx last chunk, len = %ld\n", len);
+        DEBUG_OUT("rx last chunk, len = %zu\n", len);
         memcpy(self->data_pkt.buf + self->rx_idx, transfer->buffer, len);
         self->busy = false;
         return -1;
@@ -156,13 +165,13 @@ static int tx_stream_callback(hackrf_transfer *transfer) {
 
     if (self->data_pkt.buf) {
         if (self->tx_len > (size_t) transfer->buffer_length) {
-            DEBUG_OUT("tx draining pkt: %ld\n", self->tx_len);
+            DEBUG_OUT("tx draining pkt: %zu\n", self->tx_len);
             memcpy(transfer->buffer, self->data_pkt.buf + self->tx_idx, transfer->buffer_length);
             self->tx_idx += transfer->buffer_length;
             self->tx_len -= transfer->buffer_length;
             return 0;
         } else {
-            DEBUG_OUT("tx drained pkt: %ld\n", self->tx_len);
+            DEBUG_OUT("tx drained pkt: %zu\n", self->tx_len);
             memcpy(transfer->buffer, self->data_pkt.buf + self->tx_idx, self->tx_len);
             idx = self->tx_len;
             free(self->data_pkt.buf);
@@ -180,14 +189,14 @@ static int tx_stream_callback(hackrf_transfer *transfer) {
         }
 
         if (self->data_pkt.size > remaining_bytes) {
-            DEBUG_OUT("tx pkt_size = %ld, remaining = %ld\n", self->data_pkt.size, remaining_bytes);
+            DEBUG_OUT("tx pkt_size = %zu, remaining = %zu\n", self->data_pkt.size, remaining_bytes);
             memcpy(transfer->buffer + idx, self->data_pkt.buf, remaining_bytes);
             self->tx_idx = remaining_bytes;
             self->tx_len = self->data_pkt.size - remaining_bytes;
             return 0;
         }
 
-        DEBUG_OUT("tx copy %ld, idx = %ld\n", self->data_pkt.size, idx);
+        DEBUG_OUT("tx copy %zu, idx = %zu\n", self->data_pkt.size, idx);
         memcpy(transfer->buffer + idx, self->data_pkt.buf, self->data_pkt.size);
         idx += self->data_pkt.size;
         free(self->data_pkt.buf);
@@ -332,7 +341,7 @@ static PyObject *py_pop(HackrfObject *self, PyObject *args) {
             Py_RETURN_NONE;
         }
 
-        DEBUG_OUT("pop %ld bytes\n", pkt.size);
+        DEBUG_OUT("pop %zu bytes\n", pkt.size);
 
         PyObject *array = PyByteArray_FromStringAndSize((const char *) pkt.buf, pkt.size);
         free(pkt.buf);
@@ -413,6 +422,8 @@ static PyObject *py_start_rx_stream(HackrfObject *self, PyObject *Py_UNUSED(unus
         Py_RETURN_NONE;
     }
 
+    flush_queue(&self->pkt_queue);
+
     int ok = hackrf_start_rx(self->device, rx_stream_callback, (void *) self);
     self->busy = (ok == HACKRF_SUCCESS);
 
@@ -459,6 +470,8 @@ static PyObject *py_start_tx_stream(HackrfObject *self, PyObject *Py_UNUSED(unus
         PyErr_SetString(PyExc_RuntimeError, "queue not initialized");
         Py_RETURN_NONE;
     }
+
+    flush_queue(&self->pkt_queue);
 
     self->busy = true;
     self->tx_len = 0;
@@ -550,10 +563,6 @@ static PyObject *py_stop_transfer(HackrfObject *self, PyObject *Py_UNUSED(unused
     self->busy = false;
     hackrf_stop_tx(self->device); // same code used for rx
 
-    /* flush queue */
-    while (queue_pop_noblock(&self->pkt_queue, &self->data_pkt))
-        pkt_free(self);
-
     Py_RETURN_NONE;
 }
 
@@ -616,6 +625,7 @@ static int py_init(HackrfObject *self, PyObject *args, PyObject *kwds) {
 static void py_dealloc(HackrfObject *self) {
     queue_terminate(&self->pkt_queue);
     hackrf_close(self->device);
+    flush_queue(&self->pkt_queue);
     queue_deinit(&self->pkt_queue);
     pkt_free(self);
 
