@@ -30,6 +30,18 @@ bool queue_init(struct queue *q, size_t item_size, size_t max_items) {
     return true;
 }
 
+bool queue_resize(struct queue *q, size_t max_items) {
+    size_t size = max_items * q->item_size;
+    void *data = realloc(q->data, size);
+    if (data == NULL) {
+        return false;
+    }
+
+    q->data = data;
+    q->size = size;
+    return true;
+}
+
 bool queue_push_noblock(struct queue *q, void *v) {
     pthread_mutex_lock(&q->mutex);
 
@@ -93,7 +105,6 @@ bool queue_pop_noblock(struct queue *q, void *v) {
 
 bool queue_pop(struct queue *q, void *v, unsigned int timeout_ms) {
     pthread_mutex_lock(&q->mutex);
-
     while (q->tail == q->head) {
         int ret = 0;
         if (timeout_ms > 0) {

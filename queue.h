@@ -25,9 +25,22 @@ struct queue {
  * @param q queue
  * @param item_size item size in bytes
  * @param max_items maximum number of items in the queue
+ *
  * @return false if memory allocation failed
  */
 bool queue_init(struct queue *q, size_t item_size, size_t max_items);
+
+/**
+ * Resize the queue
+ *
+ * @param q queue
+ * @param q queue
+ * @param item_size item size in bytes
+ * @param max_items maximum number of items in the queue
+ *
+ * @return false if memory allocation failed
+ */
+bool queue_resize(struct queue *q, size_t max_items);
 
 /**
  * Destroy the queue and allocated resources. Call only after all threads have
@@ -74,6 +87,7 @@ bool queue_push(struct queue *q, void *v, unsigned int timeout_ms);
  *
  * @param q queue
  * @param v item to push
+ *
  * @return false if the queue is full
  */
 bool queue_push_noblock(struct queue *q, void *v);
@@ -94,6 +108,7 @@ bool queue_pop(struct queue *q, void *v, unsigned int timeout_ms);
  *
  * @param q queue
  * @param v pointer to store the item
+ *
  * @return false if the queue is empty
  */
 bool queue_pop_noblock(struct queue *q, void *v);

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <libhackrf/hackrf.h>
 #include "queue.h"
@@ -30,6 +31,10 @@ typedef struct {
     bool allow_overruns;
     volatile bool busy;
 } HackrfObject;
+
+static struct queue **queue_list;
+static int queue_list_size;
+static void (*py_sigint_handler)(int);
 
 static int pkt_allocate(HackrfObject *self, size_t size) {
     if (self->data_pkt.buf != NULL) {
@@ -123,6 +128,7 @@ static int rx_callback(hackrf_transfer *transfer) {
 static int rx_stream_callback(hackrf_transfer *transfer) {
     DEBUG_OUT("rx_len = %d\n", transfer->valid_length);
     HackrfObject *self = (HackrfObject *) transfer->rx_ctx;
+    struct packet pkt;
 
     if (!self->busy) {
         DEBUG_OUT("rx done!\n");
@@ -130,7 +136,6 @@ static int rx_stream_callback(hackrf_transfer *transfer) {
     }
 
     if (transfer->valid_length > 0) {
-        struct packet pkt;
         pkt.buf = malloc(transfer->valid_length);
         if (pkt.buf == NULL) {
             DEBUG_OUT("unable to allocate memory for rx stream\n");
@@ -141,17 +146,31 @@ static int rx_stream_callback(hackrf_transfer *transfer) {
         pkt.size = transfer->valid_length;
 
         if (!queue_push_noblock(&self->pkt_queue, &pkt)) {
-            DEBUG_OUT("rx queue full - dropping pkt\n");
-            free(pkt.buf);
-
             if (!self->allow_overruns) {
-                self->busy = false;
-                return -1;
+                goto RX_STREAM_CLEANUP;
+            }
+
+            // pop first element and push new one (circular buffer)
+            struct packet p;
+            if (!queue_pop_noblock(&self->pkt_queue, &p)) {
+                goto RX_STREAM_CLEANUP;
+            }
+            free(p.buf);
+
+            if (!queue_push_noblock(&self->pkt_queue, &pkt)) {
+                goto RX_STREAM_CLEANUP;
             }
         }
     }
 
     return 0;
+
+RX_STREAM_CLEANUP:
+    DEBUG_OUT("rx queue full - dropping pkt\n");
+    free(pkt.buf);
+    self->busy = false;
+
+    return -1;
 }
 
 static int tx_stream_callback(hackrf_transfer *transfer) {
@@ -179,7 +198,7 @@ static int tx_stream_callback(hackrf_transfer *transfer) {
         }
     }
 
-    /* pop messages from queue until we have enough data to send */
+    // pop messages from queue until we have enough data to send
     size_t remaining_bytes = transfer->buffer_length - idx;
     while (remaining_bytes > 0) {
         if (!queue_pop_noblock(&self->pkt_queue, &self->data_pkt)) {
@@ -322,10 +341,12 @@ static PyObject *py_read(HackrfObject *self, PyObject *Py_UNUSED(unused)) {
     return array;
 }
 
-static PyObject *py_pop(HackrfObject *self, PyObject *args) {
+static PyObject *py_pop(HackrfObject *self, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"block", "timeout", NULL};
+    bool block = true;
     uint32_t timeout = 0;
-    if (!PyArg_ParseTuple(args, "|I", &timeout)) {
-        PyErr_SetString(PyExc_TypeError, "argument must be int");
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|pI", kwlist, &block, &timeout)) {
+        PyErr_SetString(PyExc_TypeError, "invalid argument");
         Py_RETURN_NONE;
     }
 
@@ -335,7 +356,9 @@ static PyObject *py_pop(HackrfObject *self, PyObject *args) {
     }
 
     struct packet pkt = {0};
-    if (queue_pop(&self->pkt_queue, &pkt, timeout)) {
+    bool ok = block ? queue_pop(&self->pkt_queue, &pkt, timeout) :
+            queue_pop_noblock(&self->pkt_queue, &pkt);
+    if (ok) {
         if (pkt.buf == NULL) {
             DEBUG_OUT("rx thread: buffer is null\n");
             Py_RETURN_NONE;
@@ -351,10 +374,12 @@ static PyObject *py_pop(HackrfObject *self, PyObject *args) {
     Py_RETURN_NONE;
 }
 
-static PyObject *py_push(HackrfObject *self, PyObject *args) {
-    uint32_t timeout;
+static PyObject *py_push(HackrfObject *self, PyObject *args, PyObject *kwds) {
+    static char *kwlist[] = {"item", "block", "timeout", NULL};
+    bool block = true;
+    uint32_t timeout = 0;
     PyObject *tx_buf;
-    if (!PyArg_ParseTuple(args, "OI", &tx_buf, &timeout)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|pI", kwlist, &tx_buf, &timeout, &block)) {
         PyErr_SetString(PyExc_TypeError, "invalid argument");
         Py_RETURN_NONE;
     }
@@ -380,7 +405,9 @@ static PyObject *py_push(HackrfObject *self, PyObject *args) {
     }
     memcpy(pkt.buf, PyByteArray_AS_STRING(tx_buf), len);
 
-    if (!queue_push_noblock(&self->pkt_queue, &pkt)) {
+    bool ok = block ? queue_push(&self->pkt_queue, &pkt, timeout) :
+            queue_push_noblock(&self->pkt_queue, &pkt);
+    if (!ok) {
         DEBUG_OUT("rx queue full - dropping pkt\n");
         free(pkt.buf);
         Py_RETURN_FALSE;
@@ -592,6 +619,23 @@ static PyObject *py_get_blocks_per_transfer(HackrfObject *self, void *closure) {
     return PyLong_FromLong(16); // defined in hackrf_sweep.c
 }
 
+static PyObject *py_set_fifo_size(HackrfObject *self, PyObject *args) {
+    uint32_t q_len;
+    if (!PyArg_ParseTuple(args, "I", &q_len) || q_len == 0) {
+        PyErr_SetString(PyExc_TypeError, "invalid argument");
+        Py_RETURN_NONE;
+    }
+
+    flush_queue(&self->pkt_queue);
+
+    if (!queue_resize(&self->pkt_queue, q_len)) {
+        PyErr_NoMemory();
+        Py_RETURN_NONE;
+    }
+
+    Py_RETURN_NONE;
+}
+
 static int py_init(HackrfObject *self, PyObject *args, PyObject *kwds) {
     static char *kwlist[] = {"fifo_len", "device_serial", NULL};
     const char *serial = NULL;
@@ -607,10 +651,20 @@ static int py_init(HackrfObject *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
+    // queue_init with q_len = 0 is valid
     if (!queue_init(&self->pkt_queue, sizeof(struct packet), q_len)) {
         PyErr_SetString(PyExc_RuntimeError, "failed to initialize queue");
         return -1;
     }
+
+    // keep track of queues - used for cleanup
+    queue_list_size++;
+    queue_list = realloc(queue_list, queue_list_size * sizeof(struct queue *));
+    if (queue_list == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    queue_list[queue_list_size - 1] = &self->pkt_queue;
 
     hackrf_set_hw_sync_mode(self->device, 0);
     hackrf_enable_tx_flush(self->device, flush_callback, (void*) self);
@@ -623,7 +677,6 @@ static int py_init(HackrfObject *self, PyObject *args, PyObject *kwds) {
 }
 
 static void py_dealloc(HackrfObject *self) {
-    queue_terminate(&self->pkt_queue);
     hackrf_close(self->device);
     flush_queue(&self->pkt_queue);
     queue_deinit(&self->pkt_queue);
@@ -636,6 +689,16 @@ static void cleanup() {
     hackrf_exit();
 }
 
+static void sigint_handler(int signum) {
+    DEBUG_OUT("terminating..\n");
+
+    for (int i = 0; i < queue_list_size; i++)
+        queue_terminate(queue_list[i]);
+
+    if (py_sigint_handler)
+        py_sigint_handler(signum);
+}
+
 static PyGetSetDef hackrf_getsetters[] = {
     {"BYTES_PER_BLOCK", (getter) py_get_bytes_per_block, NULL, "number of bytes per block", NULL},
     {"BLOCKS_PER_TRANSFER", (getter) py_get_blocks_per_transfer, NULL, "number of blocks per transfer", NULL},
@@ -644,6 +707,7 @@ static PyGetSetDef hackrf_getsetters[] = {
 
 static PyMethodDef hackrf_methods[] = {
     {"busy", (PyCFunction) py_busy, METH_NOARGS, "check if transmission is in progress"},
+    {"set_fifo_size", (PyCFunction) py_set_fifo_size, METH_VARARGS, "set FIFO size"},
     {"start_tx", (PyCFunction) py_start_tx, METH_VARARGS, "start transmission"},
     {"start_rx", (PyCFunction) py_start_rx, METH_VARARGS, "start reception of fixed length"},
     {"start_rx_stream", (PyCFunction) py_start_rx_stream, METH_NOARGS, "start rx stream"},
@@ -656,8 +720,8 @@ static PyMethodDef hackrf_methods[] = {
         "offset - frequency offset added to tuned frequencies. sample_rate / 2 is a good value"
     },
     {"allow_overruns", (PyCFunction) py_allow_overruns, METH_VARARGS, "allow dropping packets"},
-    {"push", (PyCFunction) py_push, METH_VARARGS, "push data to tx queue"},
-    {"pop", (PyCFunction) py_pop, METH_VARARGS, "pop data from rx queue"},
+    {"push", (PyCFunction) py_push, METH_VARARGS | METH_KEYWORDS, "push data to tx queue"},
+    {"pop", (PyCFunction) py_pop, METH_VARARGS | METH_KEYWORDS, "pop data from rx queue"},
     {"read", (PyCFunction) py_read, METH_NOARGS, "read received data"},
     {"set_sample_rate", (PyCFunction) py_set_sample_rate, METH_VARARGS, "set sample rate"},
     {"set_freq", (PyCFunction) py_set_freq, METH_VARARGS, "set frequency"},
@@ -711,6 +775,11 @@ PyMODINIT_FUNC PyInit_py_hackrf() {
         Py_DECREF(m);
         return NULL;
     }
+
+    // save python's sigint handler and set our own
+    py_sigint_handler = signal(SIGINT, sigint_handler);
+    if (signal(SIGINT, sigint_handler) == SIG_ERR)
+        return NULL;
 
     if (hackrf_init() != HACKRF_SUCCESS)
         return NULL;
