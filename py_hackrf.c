@@ -597,28 +597,6 @@ static PyObject *py_busy(HackrfObject *self, PyObject *Py_UNUSED(unused)) {
     return Py_NewRef(self->busy ? Py_True : Py_False);
 }
 
-static PyObject *py_device_list(PyObject *Py_UNUSED(unused)) {
-    hackrf_device_list_t *list = hackrf_device_list();
-
-    PyObject *devices = PyList_New(0);
-    for (int i = 0; i < list->devicecount; i++) {
-        PyObject *device = Py_BuildValue("s", list->serial_numbers[i]);
-        PyList_Append(devices, device);
-        Py_DECREF(device);
-    }
-
-    hackrf_device_list_free(list);
-    return devices;
-}
-
-static PyObject *py_get_bytes_per_block(HackrfObject *self, void *closure) {
-    return PyLong_FromLong(BYTES_PER_BLOCK);
-}
-
-static PyObject *py_get_blocks_per_transfer(HackrfObject *self, void *closure) {
-    return PyLong_FromLong(16); // defined in hackrf_sweep.c
-}
-
 static PyObject *py_set_fifo_size(HackrfObject *self, PyObject *args) {
     uint32_t q_len;
     if (!PyArg_ParseTuple(args, "I", &q_len) || q_len == 0) {
@@ -685,6 +663,25 @@ static void py_dealloc(HackrfObject *self) {
     Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
+static PyObject *py_device_list(PyObject *Py_UNUSED(unused)) {
+    hackrf_device_list_t *list = hackrf_device_list();
+
+    PyObject *devices = PyList_New(0);
+    for (int i = 0; i < list->devicecount; i++) {
+        PyObject *device = Py_BuildValue("s", list->serial_numbers[i]);
+        PyList_Append(devices, device);
+        Py_DECREF(device);
+    }
+
+    hackrf_device_list_free(list);
+    return devices;
+}
+
+static PyObject *py_bytes_per_transfer(PyObject *Py_UNUSED(unused)) {
+    // 16 blocks per transfer, defined in hackrf_sweep.c
+    return PyLong_FromLong(BYTES_PER_BLOCK * 16);
+}
+
 static void cleanup() {
     hackrf_exit();
 }
@@ -698,12 +695,6 @@ static void sigint_handler(int signum) {
     if (py_sigint_handler)
         py_sigint_handler(signum);
 }
-
-static PyGetSetDef hackrf_getsetters[] = {
-    {"BYTES_PER_BLOCK", (getter) py_get_bytes_per_block, NULL, "number of bytes per block", NULL},
-    {"BLOCKS_PER_TRANSFER", (getter) py_get_blocks_per_transfer, NULL, "number of blocks per transfer", NULL},
-    {NULL}
-};
 
 static PyMethodDef hackrf_methods[] = {
     {"busy", (PyCFunction) py_busy, METH_NOARGS, "check if transmission is in progress"},
@@ -740,6 +731,7 @@ static PyMethodDef hackrf_methods[] = {
 
 static PyMethodDef module_method_table[] = {
     {"device_list", (PyCFunction) py_device_list, METH_NOARGS, "list available hackrf devices"},
+    {"bytes_per_transfer", (PyCFunction) py_bytes_per_transfer, METH_NOARGS, "get number of bytes per usb transfer"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -753,8 +745,7 @@ static PyTypeObject HackrfType = {
     .tp_new = PyType_GenericNew,
     .tp_init = (initproc) py_init,
     .tp_dealloc = (destructor) py_dealloc,
-    .tp_methods = hackrf_methods,
-    .tp_getset = hackrf_getsetters
+    .tp_methods = hackrf_methods
 };
 
 static struct PyModuleDef module = {
